@@ -1,40 +1,60 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
-import subprocess, uuid, os
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
-app = FastAPI()
+app = FastAPI(title="Render FastAPI App", version="1.0.0")
+
+# Safe default CORS. Tighten this later if you know your frontend domain.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/")
-def root():
-    return {"status": "Video backend running"}
+def home():
+    return {
+        "status": "ok",
+        "message": "FastAPI is running on Render.",
+        "docs": "/docs",
+        "health": "/health",
+    }
 
-@app.post("/render-video")
-async def render_video(audio: UploadFile = File(...), image: UploadFile = File(...)):
-    uid = str(uuid.uuid4())
-    audio_path = f"/tmp/{uid}_audio"
-    image_path = f"/tmp/{uid}_image"
-    output_path = f"/tmp/{uid}.mp4"
 
-    with open(audio_path, "wb") as f:
-        f.write(await audio.read())
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
 
-    with open(image_path, "wb") as f:
-        f.write(await image.read())
 
-    cmd = [
-        "ffmpeg","-y",
-        "-loop","1","-i",image_path,
-        "-i",audio_path,
-        "-c:v","libx264",
-        "-tune","stillimage",
-        "-c:a","aac",
-        "-b:a","192k",
-        "-pix_fmt","yuv420p",
-        "-shortest",
-        "-vf","scale=3840:2160",
-        output_path
-    ]
+@app.get("/test", response_class=HTMLResponse)
+def test_page():
+    return """
+    <!doctype html>
+    <html>
+      <head><title>FastAPI Upload Test</title></head>
+      <body style="font-family:Arial;max-width:700px;margin:40px auto;">
+        <h1>FastAPI is running ✅</h1>
+        <p>Use this form to test file uploads.</p>
+        <form action="/upload" enctype="multipart/form-data" method="post">
+          <input name="file" type="file" />
+          <button type="submit">Upload</button>
+        </form>
+        <p>API docs: <a href="/docs">/docs</a></p>
+      </body>
+    </html>
+    """
 
-    subprocess.run(cmd)
 
-    return FileResponse(output_path, media_type="video/mp4", filename="video.mp4")
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    # Reads the upload so we can report size. For very large files, store/stream instead.
+    data = await file.read()
+    return {
+        "status": "uploaded",
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size_bytes": len(data),
+    }
