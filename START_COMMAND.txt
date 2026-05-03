@@ -1,1 +1,8 @@
-uvicorn main:app --host 0.0.0.0 --port $PORT
+Build Command:
+pip install -r requirements.txt
+
+Start Command:
+python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+
+Important:
+Use this exact Start Command in Render to avoid the "Exited with status 127" error.
