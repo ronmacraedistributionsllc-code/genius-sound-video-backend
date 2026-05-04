@@ -1,24 +1,29 @@
 # Genius Sound Video Backend
 
-Creates 1080p or 4K MP4 videos from an uploaded audio file and cover art image.
+Upload this folder to GitHub as your backend repo.
 
-## Endpoints
+## DigitalOcean App Platform Settings
 
+Run Command:
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8080
+```
+
+If you use Docker, DigitalOcean will install FFmpeg automatically from the Dockerfile.
+
+## API
+
+Health:
+```txt
 GET /
-Returns status.
+GET /health
+```
 
-POST /render-video
-Form fields:
-- audio: MP3/WAV/M4A file
-- image: JPG/PNG cover art
-- resolution: 1080p or 4k
-- artist: optional
-- title: optional
-
-## Render settings
-
-Build Command:
-pip install -r requirements.txt
-
-Start Command:
-uvicorn main:app --host 0.0.0.0 --port 10000
+Create video:
+```txt
+POST /create-video
+Form-data:
+- image: JPG/PNG/WEBP
+- audio: MP3/WAV/M4A
+- quality: 1080p or 4k
+```

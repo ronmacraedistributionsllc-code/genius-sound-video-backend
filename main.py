@@ -1,116 +1,153 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-import subprocess
-import uuid
 import os
+import uuid
+import shutil
+import subprocess
 from pathlib import Path
+from typing import Optional
 
-try:
-    import imageio_ffmpeg
-except Exception:
-    imageio_ffmpeg = None
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-app = FastAPI(title="Genius Sound Video Backend")
+APP_NAME = "Genius Sound Video Backend"
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+OUTPUT_DIR = BASE_DIR / "outputs"
+UPLOAD_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
 
+app = FastAPI(title=APP_NAME)
+
+# Allow your website to call this backend.
+# For tighter security, replace "*" with your real domain later.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+
+
 @app.get("/")
 def root():
-    return {"status": "Video backend running", "supports": ["1080p", "4k"]}
+    return {
+        "status": "running",
+        "name": APP_NAME,
+        "routes": ["/health", "/create-video"],
+    }
 
-def ffmpeg_bin():
-    if imageio_ffmpeg:
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    return "ffmpeg"
 
-def safe_ext(filename, default):
-    ext = Path(filename or "").suffix.lower()
+@app.get("/health")
+def health():
+    ffmpeg_ok = shutil.which("ffmpeg") is not None
+    return {"ok": True, "ffmpeg": ffmpeg_ok}
+
+
+def save_upload(upload: UploadFile, folder: Path, prefix: str) -> Path:
+    ext = Path(upload.filename or "").suffix.lower()
     if not ext:
-        return default
-    return ext
+        raise HTTPException(status_code=400, detail=f"{prefix} file needs an extension")
+    out_path = folder / f"{prefix}_{uuid.uuid4().hex}{ext}"
+    with out_path.open("wb") as f:
+        shutil.copyfileobj(upload.file, f)
+    return out_path
 
-@app.post("/render-video")
-async def render_video(
-    audio: UploadFile = File(...),
+
+def get_resolution(quality: str) -> tuple[int, int]:
+    q = (quality or "1080p").lower().strip()
+    if q in ["4k", "2160p", "uhd"]:
+        return 3840, 2160
+    return 1920, 1080
+
+
+@app.post("/create-video")
+async def create_video(
     image: UploadFile = File(...),
-    resolution: str = Form("1080p"),
-    artist: str = Form("genius-sound"),
-    title: str = Form("video")
+    audio: UploadFile = File(...),
+    quality: str = Form("1080p"),
 ):
-    uid = str(uuid.uuid4())
-    audio_ext = safe_ext(audio.filename, ".mp3")
-    image_ext = safe_ext(image.filename, ".png")
+    """
+    Upload a photo + MP3/WAV and get a 1080p or 4K MP4 video.
+    Form fields:
+      image: jpg/png/webp
+      audio: mp3/wav/m4a
+      quality: 1080p or 4k
+    """
 
-    audio_path = f"/tmp/{uid}_audio{audio_ext}"
-    image_path = f"/tmp/{uid}_image{image_ext}"
-    output_path = f"/tmp/{uid}_{resolution}.mp4"
+    if shutil.which("ffmpeg") is None:
+        raise HTTPException(
+            status_code=500,
+            detail="FFmpeg is not installed on the server. Use Docker or add FFmpeg support.",
+        )
 
-    with open(audio_path, "wb") as f:
-        f.write(await audio.read())
+    job_id = uuid.uuid4().hex
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(image_path, "wb") as f:
-        f.write(await image.read())
+    image_path = save_upload(image, job_dir, "image")
+    audio_path = save_upload(audio, job_dir, "audio")
 
-    res = (resolution or "1080p").lower().strip()
-    if res in ["4k", "2160p", "uhd"]:
-        width, height = 3840, 2160
-        crf = "24"
-        preset = "veryfast"
-    else:
-        width, height = 1920, 1080
-        crf = "23"
-        preset = "veryfast"
-        res = "1080p"
+    width, height = get_resolution(quality)
+    output_path = OUTPUT_DIR / f"genius_sound_video_{job_id}_{quality.lower()}.mp4"
 
+    # Still image + audio into video, scaled/cropped to exact 16:9.
     vf = (
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-        "format=yuv420p"
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},format=yuv420p"
     )
 
     cmd = [
-        ffmpeg_bin(),
+        "ffmpeg",
         "-y",
         "-loop", "1",
-        "-framerate", "30",
-        "-i", image_path,
-        "-i", audio_path,
+        "-i", str(image_path),
+        "-i", str(audio_path),
         "-vf", vf,
         "-c:v", "libx264",
-        "-preset", preset,
+        "-preset", "veryfast",
         "-tune", "stillimage",
-        "-crf", crf,
         "-c:a", "aac",
         "-b:a", "192k",
         "-shortest",
         "-movflags", "+faststart",
-        output_path
+        str(output_path),
     ]
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Video render timed out.")
 
-    if result.returncode != 0 or not os.path.exists(output_path):
-        return JSONResponse(
+    if result.returncode != 0:
+        raise HTTPException(
             status_code=500,
-            content={
-                "error": "FFmpeg render failed",
-                "details": result.stderr[-4000:]
-            }
+            detail={
+                "message": "FFmpeg failed",
+                "error": result.stderr[-3000:],
+            },
         )
 
-    clean_artist = "".join(c if c.isalnum() else "-" for c in (artist or "genius-sound")).strip("-")
-    clean_title = "".join(c if c.isalnum() else "-" for c in (title or "video")).strip("-")
-    filename = f"{clean_artist}-{clean_title}-{res}.mp4"
+    return {
+        "ok": True,
+        "quality": quality,
+        "download_url": f"/outputs/{output_path.name}",
+        "filename": output_path.name,
+    }
 
-    return FileResponse(
-        output_path,
-        media_type="video/mp4",
-        filename=filename
-    )
+
+@app.get("/download/{filename}")
+def download(filename: str):
+    file_path = OUTPUT_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(file_path), media_type="video/mp4", filename=filename)
