@@ -1,29 +1,23 @@
-# Genius Sound Video Backend
+# Genius Sound Video Backend — 480p Added
 
-Upload this folder to GitHub as your backend repo.
+This version supports:
+- 480p
+- 1080p
+- 4K
 
-## DigitalOcean App Platform Settings
+Use 480p first to test on the small 512MB server.
 
-Run Command:
+DigitalOcean Run Command:
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8080
 ```
 
-If you use Docker, DigitalOcean will install FFmpeg automatically from the Dockerfile.
-
-## API
-
-Health:
+Test after deploy:
 ```txt
-GET /
-GET /health
+/health
 ```
 
-Create video:
-```txt
-POST /create-video
-Form-data:
-- image: JPG/PNG/WEBP
-- audio: MP3/WAV/M4A
-- quality: 1080p or 4k
+You should see:
+```json
+"ffmpeg": true
 ```

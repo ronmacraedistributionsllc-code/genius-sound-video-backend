@@ -3,11 +3,10 @@ import uuid
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 APP_NAME = "Genius Sound Video Backend"
@@ -19,12 +18,10 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title=APP_NAME)
 
-# Allow your website to call this backend.
-# For tighter security, replace "*" with your real domain later.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -38,13 +35,17 @@ def root():
         "status": "running",
         "name": APP_NAME,
         "routes": ["/health", "/create-video"],
+        "qualities": ["480p", "1080p", "4k"],
     }
 
 
 @app.get("/health")
 def health():
-    ffmpeg_ok = shutil.which("ffmpeg") is not None
-    return {"ok": True, "ffmpeg": ffmpeg_ok}
+    return {
+        "ok": True,
+        "ffmpeg": shutil.which("ffmpeg") is not None,
+        "qualities": ["480p", "1080p", "4k"],
+    }
 
 
 def save_upload(upload: UploadFile, folder: Path, prefix: str) -> Path:
@@ -59,6 +60,8 @@ def save_upload(upload: UploadFile, folder: Path, prefix: str) -> Path:
 
 def get_resolution(quality: str) -> tuple[int, int]:
     q = (quality or "1080p").lower().strip()
+    if q in ["480p", "sd"]:
+        return 854, 480
     if q in ["4k", "2160p", "uhd"]:
         return 3840, 2160
     return 1920, 1080
@@ -69,20 +72,23 @@ async def create_video(
     image: UploadFile = File(...),
     audio: UploadFile = File(...),
     quality: str = Form("1080p"),
+    resolution: str = Form(None),
+    artist: str = Form(""),
+    title: str = Form(""),
 ):
     """
-    Upload a photo + MP3/WAV and get a 1080p or 4K MP4 video.
-    Form fields:
-      image: jpg/png/webp
-      audio: mp3/wav/m4a
-      quality: 1080p or 4k
+    Upload a photo + audio and get a 480p, 1080p, or 4K MP4 video.
+    Accepts either quality or resolution field from the frontend.
     """
 
     if shutil.which("ffmpeg") is None:
         raise HTTPException(
             status_code=500,
-            detail="FFmpeg is not installed on the server. Use Docker or add FFmpeg support.",
+            detail="FFmpeg is not installed on the server.",
         )
+
+    # Frontend may send resolution instead of quality.
+    selected_quality = resolution or quality or "1080p"
 
     job_id = uuid.uuid4().hex
     job_dir = UPLOAD_DIR / job_id
@@ -91,10 +97,10 @@ async def create_video(
     image_path = save_upload(image, job_dir, "image")
     audio_path = save_upload(audio, job_dir, "audio")
 
-    width, height = get_resolution(quality)
-    output_path = OUTPUT_DIR / f"genius_sound_video_{job_id}_{quality.lower()}.mp4"
+    width, height = get_resolution(selected_quality)
+    safe_quality = selected_quality.lower().replace("/", "-").replace(" ", "-")
+    output_path = OUTPUT_DIR / f"genius_sound_video_{job_id}_{safe_quality}.mp4"
 
-    # Still image + audio into video, scaled/cropped to exact 16:9.
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},format=yuv420p"
@@ -104,12 +110,14 @@ async def create_video(
         "ffmpeg",
         "-y",
         "-loop", "1",
+        "-framerate", "30",
         "-i", str(image_path),
         "-i", str(audio_path),
         "-vf", vf,
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-tune", "stillimage",
+        "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "192k",
         "-shortest",
@@ -139,7 +147,7 @@ async def create_video(
 
     return {
         "ok": True,
-        "quality": quality,
+        "quality": selected_quality,
         "download_url": f"/outputs/{output_path.name}",
         "filename": output_path.name,
     }
