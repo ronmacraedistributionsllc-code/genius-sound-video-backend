@@ -1,51 +1,24 @@
-# Genius Sound Command Center + 4K Video Generator
+# Genius Sound Video Backend
 
-This package keeps the full Genius Sound Command Center app:
+Creates 1080p or 4K MP4 videos from an uploaded audio file and cover art image.
 
-- Contracts
-- Artists
-- Pro Audio Analyzer
-- Riddim Prompt
-- SEO
-- Projects
-- Cloud/Supabase
+## Endpoints
 
-It adds a new **Video** tab for generating a 4K MP4 from one audio file and one photo.
+GET /
+Returns status.
+
+POST /render-video
+Form fields:
+- audio: MP3/WAV/M4A file
+- image: JPG/PNG cover art
+- resolution: 1080p or 4k
+- artist: optional
+- title: optional
 
 ## Render settings
 
 Build Command:
-
-```bash
 pip install -r requirements.txt
-```
 
 Start Command:
-
-```bash
-python -m uvicorn main:app --host 0.0.0.0 --port $PORT
-```
-
-Using `python -m uvicorn` avoids the common Render `Exited with status 127` problem caused by Render trying to run a command it cannot find.
-
-## Endpoints
-
-- `/` loads the website
-- `/health` tests the backend
-- `/generate` starts the 4K render
-- `/status/<job_id>` returns progress
-- `/download/<job_id>` downloads the finished MP4
-- `/docs` shows FastAPI API docs
-
-## Notes
-
-Generated files are stored in temporary server storage. On Render free instances, the first request after inactivity can take longer, and long 4K renders can take time.
-
-You can set these optional Render environment variables:
-
-```text
-VIDEO_PRESET=ultrafast
-VIDEO_CRF=18
-```
-
-`VIDEO_PRESET=ultrafast` renders faster. `VIDEO_CRF=18` is high quality; higher CRF creates smaller files.
+uvicorn main:app --host 0.0.0.0 --port 10000
