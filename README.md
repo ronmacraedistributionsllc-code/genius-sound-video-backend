@@ -1,15 +1,17 @@
-# Genius Sound Video Backend
+# Genius Sound Video Backend — Album Frame Fix
 
-Upload ONLY these files to the GitHub backend repo:
+This version keeps the full cover art in frame and uses a stretched/blurred background behind it.
 
+Upload/replace these on the VPS or GitHub backend repo:
 - main.py
 - requirements.txt
 - Dockerfile
 
-Then DigitalOcean: Actions -> Force Rebuild and Deploy.
+Then restart:
+systemctl restart genius-video-api
 
 Test:
-/health
+https://api.ronmacraedistributions.com/health
 
-Then POST:
-/create-video
+Version should show:
+album-frame-v2

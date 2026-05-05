@@ -4,7 +4,6 @@ from fastapi.staticfiles import StaticFiles
 import shutil
 import uuid
 import subprocess
-import os
 from pathlib import Path
 
 app = FastAPI()
@@ -14,7 +13,6 @@ OUTPUT_DIR = Path("outputs")
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# This is REQUIRED so the browser can download /outputs/file.mp4
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 app.add_middleware(
@@ -30,7 +28,9 @@ def root():
     return {
         "status": "running",
         "name": "Genius Sound Video Backend",
+        "version": "album-frame-v2",
         "qualities": ["480p", "1080p", "4k"],
+        "framing": "full cover art centered with blurred stretched background",
         "routes": ["/health", "/create-video", "/outputs"]
     }
 
@@ -39,7 +39,7 @@ def health():
     return {
         "ok": True,
         "ffmpeg": shutil.which("ffmpeg") is not None,
-        "qualities": ["480p", "1080p", "4k"]
+        "version": "album-frame-v2"
     }
 
 def get_resolution(q: str):
@@ -68,7 +68,6 @@ async def create_video(
     width, height = get_resolution(selected_quality)
 
     job_id = uuid.uuid4().hex
-
     image_path = UPLOAD_DIR / f"{job_id}_image{file_ext(image.filename, '.jpg')}"
     audio_path = UPLOAD_DIR / f"{job_id}_audio{file_ext(audio.filename, '.mp3')}"
     output_path = OUTPUT_DIR / f"genius_sound_{job_id}_{selected_quality}.mp4"
@@ -80,9 +79,15 @@ async def create_video(
         with open(audio_path, "wb") as f:
             f.write(await audio.read())
 
-        vf = (
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},format=yuv420p"
+        # Music visualizer framing:
+        # - Background: same cover image stretched to fill 16:9, cropped, blurred/darkened.
+        # - Foreground: original cover art scaled down to fit fully inside the video frame.
+        # This prevents faces/text/logo from getting cut off.
+        filter_complex = (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},boxblur=30:1,eq=brightness=-0.10:saturation=1.15[bg];"
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]"
         )
 
         cmd = [
@@ -92,7 +97,9 @@ async def create_video(
             "-framerate", "30",
             "-i", str(image_path),
             "-i", str(audio_path),
-            "-vf", vf,
+            "-filter_complex", filter_complex,
+            "-map", "[v]",
+            "-map", "1:a",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "stillimage",
@@ -122,14 +129,12 @@ async def create_video(
             )
 
         if not output_path.exists() or output_path.stat().st_size == 0:
-            raise HTTPException(
-                status_code=500,
-                detail="FFmpeg finished but no video file was created."
-            )
+            raise HTTPException(status_code=500, detail="No video file was created.")
 
         return {
             "ok": True,
             "quality": selected_quality,
+            "framing": "full-cover-centered-blurred-background",
             "download_url": f"/outputs/{output_path.name}",
             "filename": output_path.name
         }
